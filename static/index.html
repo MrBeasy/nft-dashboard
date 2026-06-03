@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NFT Bid/Listing Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: #0A0F1E;
+      color: #E2E8F0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    header {
+      padding: 14px 24px;
+      border-bottom: 1px solid #1E293B;
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 16px; font-weight: 600; color: #F8FAFC; }
+    header .subtitle { font-size: 12px; color: #475569; }
+
+    .layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ─────────────────────────────────────────────────────── */
+    .sidebar {
+      width: 220px;
+      flex-shrink: 0;
+      border-right: 1px solid #1E293B;
+      padding: 16px 12px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #334155;
+      margin-bottom: 8px;
+    }
+
+    .coll-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .coll-item:hover { background: #1E293B; }
+
+    .coll-check {
+      width: 15px; height: 15px;
+      border-radius: 3px;
+      border: 1.5px solid #334155;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .coll-check.checked { border-color: var(--c); background: var(--c); }
+    .coll-check.checked::after {
+      content: '';
+      display: block;
+      width: 8px; height: 5px;
+      border-left: 1.5px solid #fff;
+      border-bottom: 1.5px solid #fff;
+      transform: rotate(-45deg) translateY(-1px);
+    }
+
+    .coll-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--c);
+      flex-shrink: 0;
+    }
+
+    .coll-meta { flex: 1; min-width: 0; }
+    .coll-name { font-size: 12px; color: #CBD5E1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .coll-floor { font-size: 10px; color: #475569; margin-top: 1px; }
+
+    /* ── Controls ────────────────────────────────────────────────────── */
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .pill {
+      padding: 4px 9px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: 1px solid #1E293B;
+      background: transparent;
+      color: #64748B;
+      cursor: pointer;
+      transition: all 0.12s;
+      line-height: 1.4;
+    }
+    .pill:hover { border-color: #334155; color: #94A3B8; }
+    .pill.on { background: #172554; border-color: #1D4ED8; color: #93C5FD; }
+
+    /* ── Chart area ──────────────────────────────────────────────────── */
+    .chart-wrap {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 16px 20px 12px;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .top-bar {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 12px;
+      flex-shrink: 0;
+    }
+
+    .ctrl-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .ctrl-label { font-size: 11px; color: #475569; }
+
+    .canvas-box {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #chart { display: block; width: 100% !important; height: 100% !important; }
+
+    .empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #334155;
+      font-size: 14px;
+      pointer-events: none;
+    }
+
+    .spinner {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(10,15,30,0.6);
+    }
+    .spinner.show { display: flex; }
+    .spinner::after {
+      content: '';
+      width: 28px; height: 28px;
+      border: 2px solid #1E293B;
+      border-top-color: #3B82F6;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>NFT Bid/Listing Dashboard</h1>
+  <span class="subtitle">% sold via listing or bid dump vs avg sale price — rolling window</span>
+</header>
+
+<div class="layout">
+
+  <div class="sidebar">
+    <div>
+      <div class="section-label">Collections</div>
+      <div id="coll-list"><span style="font-size:12px;color:#334155">Loading…</span></div>
+    </div>
+
+    <div>
+      <div class="section-label">Rolling window</div>
+      <div class="btn-row" id="win-btns">
+        <button class="pill" data-v="7">7d</button>
+        <button class="pill" data-v="14">14d</button>
+        <button class="pill on" data-v="30">30d</button>
+        <button class="pill" data-v="60">60d</button>
+        <button class="pill" data-v="90">90d</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Sale type view</div>
+      <div class="btn-row" id="metric-btns">
+        <button class="pill on" data-v="listing">Listing %</button>
+        <button class="pill" data-v="dump">Bid Dump %</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Price scale</div>
+      <div class="btn-row" id="scale-btns">
+        <button class="pill on" data-v="linear">Linear</button>
+        <button class="pill" data-v="log">Log</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Date range</div>
+      <div class="btn-row" id="range-btns">
+        <button class="pill on" data-v="all">All</button>
+        <button class="pill" data-v="1y">1Y</button>
+        <button class="pill" data-v="6m">6M</button>
+        <button class="pill" data-v="3m">3M</button>
+        <button class="pill" data-v="1m">1M</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="chart-wrap">
+    <div class="canvas-box">
+      <canvas id="chart"></canvas>
+      <div class="empty" id="empty">Select a collection to begin</div>
+      <div class="spinner" id="spinner"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────────
+const PALETTE = ['#60A5FA','#FB923C','#34D399','#C084FC','#F87171','#FBBF24'];
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const S = {
+  collections: [],
+  colors: new Map(),       // slug → hex color
+  selected: new Set(),
+  cache: {},               // slug → raw daily API data
+  window: 30,
+  metric: 'listing',
+  scale: 'linear',
+  range: 'all',
+};
+
+let chart = null;
+
+// ── Rolling-window helpers (O(n) sliding window) ─────────────────────────────
+
+function rollingRatio(data, win, metric) {
+  const n = data.days.length;
+  const out = new Array(n);
+  let bs = 0, ls = 0, left = 0;
+  for (let i = 0; i < n; i++) {
+    bs += data.bids[i]; ls += data.listings[i];
+    while (i - left + 1 > win) { bs -= data.bids[left]; ls -= data.listings[left]; left++; }
+    const total = bs + ls;
+    out[i] = { x: data.days[i], y: total > 0 ? (metric === 'dump' ? bs : ls) / total * 100 : null };
+  }
+  return out;
+}
+
+function dailyPrice(data) {
+  return data.days.map((day, i) => ({
+    x: day,
+    y: data.sale_count[i] > 0 ? data.total_price[i] / data.sale_count[i] : null,
+  }));
+}
+
+function filterRange(pts, range) {
+  if (range === 'all') return pts;
+  const ms = { '1m': 30, '3m': 90, '6m': 180, '1y': 365 }[range] * 86400000;
+  const cutoff = new Date(Date.now() - ms).toISOString().slice(0, 10);
+  return pts.filter(p => p.x >= cutoff);
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+
+function buildDatasets() {
+  const ds = [];
+  for (const slug of S.selected) {
+    const d = S.cache[slug];
+    if (!d) continue;
+    const name  = S.collections.find(c => c.slug === slug)?.name ?? slug;
+    const color = S.colors.get(slug);
+
+    const ratioData = filterRange(rollingRatio(d, S.window, S.metric), S.range);
+    const priceData = filterRange(dailyPrice(d), S.range);
+
+    ds.push({
+      label: `${name} — ${S.metric === 'dump' ? 'Bid Dump %' : 'Listing %'}`,
+      data: ratioData,
+      borderColor: color,
+      backgroundColor: color + '18',
+      yAxisID: 'yR',
+      borderWidth: 2,
+      pointRadius: 0, pointHoverRadius: 4,
+      tension: 0.25, spanGaps: true,
+      fill: false,
+    });
+    ds.push({
+      label: `${name} — Daily Avg Price (Ξ)`,
+      data: priceData,
+      borderColor: color,
+      backgroundColor: 'transparent',
+      yAxisID: 'yP',
+      borderWidth: 1.5,
+      borderDash: [6, 3],
+      pointRadius: 0, pointHoverRadius: 4,
+      tension: 0.25, spanGaps: true,
+      fill: false,
+    });
+  }
+  return ds;
+}
+
+function redraw() {
+  const datasets = buildDatasets();
+  const hasData = datasets.length > 0;
+
+  document.getElementById('empty').style.display = hasData ? 'none' : 'flex';
+
+  if (chart) { chart.destroy(); chart = null; }
+  if (!hasData) return;
+
+  const ctx = document.getElementById('chart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'x', intersect: false },
+      plugins: {
+        legend: {
+          position: 'top',
+          labels: {
+            color: '#64748B', font: { size: 11 },
+            boxWidth: 18, padding: 12,
+            usePointStyle: false,
+          },
+        },
+        tooltip: {
+          backgroundColor: '#0F172A',
+          titleColor: '#CBD5E1',
+          bodyColor: '#64748B',
+          borderColor: '#1E293B',
+          borderWidth: 1,
+          padding: 10,
+          callbacks: {
+            label(ctx) {
+              const v = ctx.parsed.y;
+              if (v == null) return null;
+              if (ctx.dataset.yAxisID === 'yR') return `  ${ctx.dataset.label}: ${v.toFixed(1)}%`;
+              return `  ${ctx.dataset.label}: ${v.toFixed(4)} ETH`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'MMM d, yyyy' },
+          grid: { color: '#0F1929' },
+          ticks: { color: '#334155', maxTicksLimit: 10 },
+        },
+        yR: {
+          type: 'linear',
+          position: 'left',
+          min: 0,
+          max: 100,
+          grid: { color: '#0F1929' },
+          ticks: {
+            color: '#334155',
+            callback: v => v + '%',
+          },
+          title: {
+            display: true,
+            text: S.metric === 'dump' ? 'Bid Dump % of Sales' : 'Listing % of Sales',
+            color: '#334155', font: { size: 10 },
+          },
+        },
+        yP: {
+          type: S.scale === 'log' ? 'logarithmic' : 'linear',
+          position: 'right',
+          min: S.scale === 'log' ? undefined : 0,
+          grid: { display: false },
+          ticks: {
+            color: '#334155',
+            callback(v) {
+              return v >= 0.01 ? v.toFixed(3) + 'Ξ' : v.toExponential(1) + 'Ξ';
+            },
+          },
+          title: {
+            display: true,
+            text: 'Daily Avg Sale Price (ETH)',
+            color: '#334155', font: { size: 10 },
+          },
+        },
+      },
+    },
+  });
+}
+
+// ── Data fetching ─────────────────────────────────────────────────────────────
+
+async function loadCollection(slug) {
+  if (S.cache[slug]) return;
+  const spinner = document.getElementById('spinner');
+  spinner.classList.add('show');
+  try {
+    const r = await fetch(`/api/chart-data?collections=${encodeURIComponent(slug)}`);
+    const json = await r.json();
+    if (json[slug]) S.cache[slug] = json[slug];
+  } finally {
+    spinner.classList.remove('show');
+  }
+}
+
+async function toggle(slug, on) {
+  if (on) {
+    S.selected.add(slug);
+    await loadCollection(slug);
+  } else {
+    S.selected.delete(slug);
+  }
+  redraw();
+}
+
+// ── Sidebar rendering ─────────────────────────────────────────────────────────
+
+function renderCollections() {
+  const el = document.getElementById('coll-list');
+  el.innerHTML = '';
+  S.collections.forEach(coll => {
+    const color = S.colors.get(coll.slug);
+    const checked = S.selected.has(coll.slug);
+    const item = document.createElement('div');
+    item.className = 'coll-item';
+    item.style.setProperty('--c', color);
+    item.innerHTML = `
+      <div class="coll-check ${checked ? 'checked' : ''}" data-slug="${coll.slug}"></div>
+      <div class="coll-dot"></div>
+      <div class="coll-meta">
+        <div class="coll-name" title="${coll.name}">${coll.name}</div>
+        <div class="coll-floor">${coll.floor_price_eth != null ? coll.floor_price_eth.toFixed(4) + ' Ξ floor' : ''}</div>
+      </div>`;
+    item.addEventListener('click', () => {
+      const now = S.selected.has(coll.slug);
+      item.querySelector('.coll-check').classList.toggle('checked', !now);
+      toggle(coll.slug, !now);
+    });
+    el.appendChild(item);
+  });
+}
+
+// ── Button groups ─────────────────────────────────────────────────────────────
+
+function setupGroup(id, stateKey, onchange) {
+  document.getElementById(id).addEventListener('click', e => {
+    const btn = e.target.closest('.pill');
+    if (!btn) return;
+    document.querySelectorAll(`#${id} .pill`).forEach(b => b.classList.remove('on'));
+    btn.classList.add('on');
+    const v = btn.dataset.v;
+    S[stateKey] = stateKey === 'window' ? parseInt(v) : v;
+    onchange();
+  });
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+async function init() {
+  const r = await fetch('/api/collections');
+  S.collections = await r.json();
+
+  // Assign stable colors
+  S.collections.forEach((c, i) => S.colors.set(c.slug, PALETTE[i % PALETTE.length]));
+
+  renderCollections();
+
+  setupGroup('win-btns',    'window', redraw);
+  setupGroup('metric-btns', 'metric', redraw);
+  setupGroup('scale-btns',  'scale',  redraw);
+  setupGroup('range-btns',  'range',  redraw);
+
+  // Auto-select first collection
+  if (S.collections.length > 0) {
+    const first = S.collections[0];
+    S.selected.add(first.slug);
+    await loadCollection(first.slug);
+    renderCollections();
+    redraw();
+  }
+}
+
+init();
+</script>
+</body>
+</html>
