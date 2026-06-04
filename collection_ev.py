@@ -37,22 +37,47 @@ def _headers() -> dict:
     return {"accept": "application/json", "x-api-key": key}
 
 
-def _get(url: str, params: dict, retries: int = 3) -> dict:
+def _get(url: str, params: dict, retries: int = 8) -> dict:
     for attempt in range(retries):
         try:
             resp = requests.get(url, params=params, headers=_headers(), timeout=15)
+
             if resp.status_code == 429:
-                wait = 2 ** attempt
-                print(f"\n  rate limited, waiting {wait}s...", flush=True)
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        wait = float(retry_after)
+                    except ValueError:
+                        wait = min(2 ** attempt, 60)
+                else:
+                    wait = min(2 ** attempt, 60)
+                print(f"\n  rate limited, waiting {wait:.0f}s (attempt {attempt + 1}/{retries})...", flush=True)
                 time.sleep(wait)
                 continue
+
+            if resp.status_code in (500, 502, 503, 504):
+                wait = min(2 ** attempt, 60)
+                print(f"\n  server error {resp.status_code}, retrying in {wait:.0f}s (attempt {attempt + 1}/{retries})...", flush=True)
+                time.sleep(wait)
+                continue
+
             resp.raise_for_status()
             return resp.json()
-        except requests.RequestException as e:
+
+        except requests.Timeout:
+            wait = min(2 ** attempt, 60)
+            print(f"\n  request timed out, retrying in {wait:.0f}s (attempt {attempt + 1}/{retries})...", flush=True)
+            time.sleep(wait)
+        except requests.ConnectionError:
+            wait = min(2 ** attempt, 60)
+            print(f"\n  connection error, retrying in {wait:.0f}s (attempt {attempt + 1}/{retries})...", flush=True)
+            time.sleep(wait)
+        except requests.RequestException:
             if attempt == retries - 1:
                 raise
-            time.sleep(1)
-    return {}
+            time.sleep(min(2 ** attempt, 60))
+
+    raise RuntimeError(f"Failed to GET {url} after {retries} attempts")
 
 
 def resolve_collection(ca_or_slug: str) -> dict:
