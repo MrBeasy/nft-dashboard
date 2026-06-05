@@ -153,12 +153,23 @@ def fetch_market_prices(slug: str) -> dict:
     return {"floor": floor, "best_offer": best_offer, "mid": mid}
 
 
-def fetch_collection_events(slug: str, since_ts: int) -> list:
+def fetch_collection_events(
+    slug: str,
+    since_ts: int,
+    occurred_before: int | None = None,
+    on_checkpoint=None,
+    checkpoint_every: int = 1000,
+) -> list:
     """
     Paginate all ETH sale events for a collection since since_ts.
-    Returns list of {nft_id, price_eth, timestamp} dicts.
+    If occurred_before is set, start pagination from that timestamp going backwards.
+    If on_checkpoint is provided, it is called with each new batch of events once
+    checkpoint_every events have accumulated, allowing callers to persist data mid-run.
+    Returns list of {nft_id, price_eth, timestamp} dicts (all events, including
+    already-checkpointed ones, so the caller can derive final sync state).
     """
     events = []
+    last_checkpoint = 0
     cursor = None
     page = 0
     done = False
@@ -167,6 +178,8 @@ def fetch_collection_events(slug: str, since_ts: int) -> list:
         params = {"event_type": "sale", "chain": "ethereum", "limit": 50}
         if cursor:
             params["next"] = cursor
+        elif occurred_before:
+            params["occurred_before"] = occurred_before
 
         data = _get(f"{OPENSEA_BASE}/events/collection/{slug}", params)
         raw = data.get("asset_events", [])
@@ -206,6 +219,11 @@ def fetch_collection_events(slug: str, since_ts: int) -> list:
                 "seller": (ev.get("seller") or "").lower(),
                 "buyer": (ev.get("buyer") or "").lower(),
             })
+
+        if on_checkpoint and len(events) - last_checkpoint >= checkpoint_every:
+            batch = events[last_checkpoint:]
+            on_checkpoint(batch)
+            last_checkpoint = len(events)
 
         if not next_cursor or not raw:
             done = True
@@ -305,7 +323,7 @@ def compute_ev(pairs: list, events: list, total_fee_bps: int, mid_price: float |
     }
 
 
-def print_results(collection: dict, prices: dict, stats: dict, events: list) -> None:
+def print_results(collection: dict, prices: dict, stats: dict, events: list, all_time: bool = False) -> None:
     floor_str = f"{prices['floor']:.4f} ETH" if prices["floor"] is not None else "N/A"
     offer_str = f"{prices['best_offer']:.4f} ETH" if prices["best_offer"] is not None else "N/A"
     mid_str = f"{prices['mid']:.4f} ETH" if prices["mid"] is not None else "N/A"
@@ -320,7 +338,7 @@ def print_results(collection: dict, prices: dict, stats: dict, events: list) -> 
 
     rows = [
         ["Collection", f"{collection['name']} ({collection['slug']})"],
-        ["Timeframe", f"{stats['timeframe_days']} days  |  {stats['total_pairs']:,} sale pairs analysed"],
+        ["Timeframe", f"{'all time' if all_time else f\"{stats['timeframe_days']} days\"}  |  {stats['total_pairs']:,} sale pairs analysed"],
         ["Fee rate", f"{fee_pct:.2f}%  ({creator_pct:.2f}% creator + {os_pct:.2f}% OpenSea)"],
         ["", ""],
         ["Current floor", floor_str],
@@ -359,8 +377,8 @@ def main():
     parser = argparse.ArgumentParser(description="Compute trading EV for an NFT collection")
     parser.add_argument("--collection", required=True,
                         help="Contract address (0x...) or OpenSea slug")
-    parser.add_argument("--days", type=int, default=365,
-                        help="Lookback window for EV calculation in days (default: 365)")
+    parser.add_argument("--days", type=int, default=0,
+                        help="Lookback window for EV calculation in days (0 = all time, default: 0)")
     parser.add_argument("--market-share", type=float, default=10.0,
                         help="Your estimated market share %% (default: 10.0)")
     args = parser.parse_args()
@@ -385,19 +403,28 @@ def main():
 
     sync = _db.get_sync_state(conn, slug)
 
+    def make_checkpoint(label: str):
+        def checkpoint(batch: list) -> None:
+            saved = _db.insert_sales(conn, slug, batch)
+            oldest_in_batch = min(e["timestamp"] for e in batch)
+            _db.update_sync_state(conn, slug, oldest_in_batch)
+            print(f"\n  [{label} checkpoint] saved {saved:,} new events (oldest so far: "
+                  f"{time.strftime('%Y-%m-%d', time.localtime(oldest_in_batch))})...", flush=True)
+        return checkpoint
+
     if sync is None:
         # New collection — fetch full history
         print(f"\nNew collection — fetching full trade history (this may take a while)...")
-        new_events = fetch_collection_events(slug, since_ts=0)
+        new_events = fetch_collection_events(slug, since_ts=0, on_checkpoint=make_checkpoint("import"))
         inserted = _db.insert_sales(conn, slug, new_events)
         oldest = min(e["timestamp"] for e in new_events) if new_events else int(time.time())
         _db.update_sync_state(conn, slug, oldest)
         print(f"  stored {inserted:,} new events to DB")
     else:
-        # Known collection — fetch only new events since last sync
+        # Known collection — fetch new events since last sync
         last_sync = sync["last_synced_at"]
         print(f"\nUpdating — fetching new events since last sync ({time.strftime('%Y-%m-%d', time.localtime(last_sync))})...")
-        new_events = fetch_collection_events(slug, since_ts=last_sync)
+        new_events = fetch_collection_events(slug, since_ts=last_sync, on_checkpoint=make_checkpoint("forward"))
         if new_events:
             inserted = _db.insert_sales(conn, slug, new_events)
             _db.update_sync_state(conn, slug, sync["oldest_ts_fetched"])
@@ -405,16 +432,30 @@ def main():
         else:
             print("  no new events since last sync")
 
+        # Backfill historical trades older than oldest stored event
+        oldest_ts = _db.get_sync_state(conn, slug)["oldest_ts_fetched"]
+        print(f"\nBackfilling history before {time.strftime('%Y-%m-%d', time.localtime(oldest_ts))}...")
+        old_events = fetch_collection_events(slug, since_ts=0, occurred_before=oldest_ts,
+                                             on_checkpoint=make_checkpoint("backfill"))
+        if old_events:
+            inserted = _db.insert_sales(conn, slug, old_events)
+            new_oldest = min(e["timestamp"] for e in old_events)
+            _db.update_sync_state(conn, slug, new_oldest)
+            print(f"  backfilled {inserted:,} historical events")
+        else:
+            print("  no additional historical events found")
+
     # Load the EV calculation window from DB
-    since_ts = int(time.time()) - args.days * 86_400
+    since_ts = 0 if args.days == 0 else int(time.time()) - args.days * 86_400
     events = _db.get_sales(conn, slug, since_ts)
     conn.close()
 
+    timeframe_label = "all time" if args.days == 0 else f"past {args.days} days"
     if not events:
-        print(f"No ETH-denominated sale events found in the past {args.days} days.")
+        print(f"No ETH-denominated sale events found ({timeframe_label}).")
         return
 
-    print(f"\nLoaded {len(events):,} events from DB for past {args.days} days.")
+    print(f"\nLoaded {len(events):,} events from DB ({timeframe_label}).")
 
     print("Building ownership pairs...")
     pairs = build_pairs(events)
@@ -425,8 +466,12 @@ def main():
         print("No consecutive pairs found — each token sold at most once in this period.")
         return
 
-    stats = compute_ev(pairs, events, collection["total_fee_bps"], prices["mid"], args.market_share, args.days)
-    print_results(collection, prices, stats, events)
+    if args.days == 0:
+        span_days = max(1, round((max(e["timestamp"] for e in events) - min(e["timestamp"] for e in events)) / 86_400))
+    else:
+        span_days = args.days
+    stats = compute_ev(pairs, events, collection["total_fee_bps"], prices["mid"], args.market_share, span_days)
+    print_results(collection, prices, stats, events, all_time=args.days == 0)
 
 
 if __name__ == "__main__":
