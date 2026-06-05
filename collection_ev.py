@@ -338,7 +338,7 @@ def print_results(collection: dict, prices: dict, stats: dict, events: list, all
 
     rows = [
         ["Collection", f"{collection['name']} ({collection['slug']})"],
-        ["Timeframe", f"{'all time' if all_time else f\"{stats['timeframe_days']} days\"}  |  {stats['total_pairs']:,} sale pairs analysed"],
+        ["Timeframe", f"{'all time' if all_time else str(stats['timeframe_days']) + ' days'}  |  {stats['total_pairs']:,} sale pairs analysed"],
         ["Fee rate", f"{fee_pct:.2f}%  ({creator_pct:.2f}% creator + {os_pct:.2f}% OpenSea)"],
         ["", ""],
         ["Current floor", floor_str],
