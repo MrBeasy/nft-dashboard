@@ -1,13 +1,56 @@
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, redirect, url_for, abort
 from pathlib import Path
 import sqlite3
+import os
 from datetime import datetime, timedelta
 from collections import defaultdict
+from flask_dance.contrib.google import make_google_blueprint, google
+from flask_dance.consumer import oauth_authorized
+from flask_login import LoginManager, login_required, login_user, logout_user, UserMixin
 
 BASE = Path(__file__).parent
 DB = BASE / 'collection_trades.db'
 
 app = Flask(__name__, static_folder=str(BASE / 'static'))
+
+app.secret_key = os.environ['SECRET_KEY']
+app.config['SESSION_COOKIE_SECURE'] = not bool(os.environ.get('OAUTHLIB_INSECURE_TRANSPORT'))
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+ALLOWED_EMAILS = [e.strip() for e in os.environ['ALLOWED_EMAILS'].split(',')]
+
+google_bp = make_google_blueprint(
+    client_id=os.environ['GOOGLE_CLIENT_ID'],
+    client_secret=os.environ['GOOGLE_CLIENT_SECRET'],
+    scope=['openid', 'https://www.googleapis.com/auth/userinfo.email', 'profile'],
+)
+app.register_blueprint(google_bp, url_prefix='/login')
+
+login_manager = LoginManager(app)
+login_manager.login_view = 'login_page'
+
+
+class User(UserMixin):
+    def __init__(self, email): self.id = email
+
+
+@login_manager.user_loader
+def load_user(user_id): return User(user_id)
+
+
+@oauth_authorized.connect_via(google_bp)
+def google_logged_in(blueprint, token):
+    if not token:
+        return False
+    resp = blueprint.session.get('/oauth2/v2/userinfo')
+    if not resp.ok:
+        abort(500)
+    email = resp.json().get('email')
+    if email not in ALLOWED_EMAILS:
+        abort(403)
+    login_user(User(email))
+    return False
 
 
 def get_db():
@@ -16,12 +59,26 @@ def get_db():
     return conn
 
 
+@app.route('/login')
+def login_page():
+    return redirect(url_for('google.login'))
+
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login_page'))
+
+
 @app.route('/')
+@login_required
 def index():
     return send_from_directory(app.static_folder, 'index.html')
 
 
 @app.route('/api/collections')
+@login_required
 def api_collections():
     conn = get_db()
     rows = conn.execute(
@@ -32,6 +89,7 @@ def api_collections():
 
 
 @app.route('/api/chart-data')
+@login_required
 def api_chart_data():
     slugs = [s.strip() for s in request.args.get('collections', '').split(',') if s.strip()]
     if not slugs:
