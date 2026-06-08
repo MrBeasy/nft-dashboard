@@ -262,6 +262,7 @@ const S = {
   metric: 'listing',
   scale: 'linear',
   range: 'all',
+  showAggregate: true,
 };
 
 let chart = null;
@@ -293,6 +294,40 @@ function filterRange(pts, range) {
   const ms = { '1m': 30, '3m': 90, '6m': 180, '1y': 365 }[range] * 86400000;
   const cutoff = new Date(Date.now() - ms).toISOString().slice(0, 10);
   return pts.filter(p => p.x >= cutoff);
+}
+
+function buildAggregate(win, metric, range) {
+  const ratioByDay = new Map();
+  const priceByDay = new Map();
+
+  for (const { slug } of S.collections) {
+    const d = S.cache[slug];
+    if (!d) continue;
+
+    for (const pt of rollingRatio(d, win, metric)) {
+      if (pt.y != null) {
+        if (!ratioByDay.has(pt.x)) ratioByDay.set(pt.x, []);
+        ratioByDay.get(pt.x).push(pt.y);
+      }
+    }
+    for (const pt of dailyPrice(d)) {
+      if (pt.y != null) {
+        if (!priceByDay.has(pt.x)) priceByDay.set(pt.x, []);
+        priceByDay.get(pt.x).push(pt.y);
+      }
+    }
+  }
+
+  const avg = arr => arr.reduce((s, v) => s + v, 0) / arr.length;
+  const sort = map =>
+    Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([x, ys]) => ({ x, y: avg(ys) }));
+
+  return {
+    ratioData: filterRange(sort(ratioByDay), range),
+    priceData: filterRange(sort(priceByDay), range),
+  };
 }
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
@@ -332,6 +367,34 @@ function buildDatasets() {
       fill: false,
     });
   }
+  if (S.showAggregate) {
+    const { ratioData, priceData } = buildAggregate(S.window, S.metric, S.range);
+    const AGG_COLOR = '#F8FAFC';
+    ds.push({
+      label: `All Collections — ${S.metric === 'dump' ? 'Bid Dump %' : 'Listing %'} (avg)`,
+      data: ratioData,
+      borderColor: AGG_COLOR,
+      backgroundColor: AGG_COLOR + '18',
+      yAxisID: 'yR',
+      borderWidth: 2.5,
+      pointRadius: 0, pointHoverRadius: 4,
+      tension: 0.25, spanGaps: true,
+      fill: false,
+    });
+    ds.push({
+      label: 'All Collections — Avg Price (Ξ)',
+      data: priceData,
+      borderColor: AGG_COLOR,
+      backgroundColor: 'transparent',
+      yAxisID: 'yP',
+      borderWidth: 2,
+      borderDash: [6, 3],
+      pointRadius: 0, pointHoverRadius: 4,
+      tension: 0.25, spanGaps: true,
+      fill: false,
+    });
+  }
+
   return ds;
 }
 
@@ -439,6 +502,21 @@ async function loadCollection(slug) {
   }
 }
 
+async function loadAllCollections() {
+  const uncached = S.collections.filter(c => !S.cache[c.slug]);
+  if (!uncached.length) return;
+  const spinner = document.getElementById('spinner');
+  spinner.classList.add('show');
+  try {
+    const slugs = uncached.map(c => c.slug).join(',');
+    const r = await fetch(`/api/chart-data?collections=${encodeURIComponent(slugs)}`);
+    const json = await r.json();
+    for (const [slug, data] of Object.entries(json)) S.cache[slug] = data;
+  } finally {
+    spinner.classList.remove('show');
+  }
+}
+
 async function toggle(slug, on) {
   if (on) {
     S.selected.add(slug);
@@ -454,6 +532,29 @@ async function toggle(slug, on) {
 function renderCollections() {
   const el = document.getElementById('coll-list');
   el.innerHTML = '';
+
+  const aggItem = document.createElement('div');
+  aggItem.className = 'coll-item';
+  aggItem.style.setProperty('--c', '#F8FAFC');
+  aggItem.innerHTML = `
+    <div class="coll-check ${S.showAggregate ? 'checked' : ''}"></div>
+    <div class="coll-dot"></div>
+    <div class="coll-meta">
+      <div class="coll-name">All Collections</div>
+      <div class="coll-floor">equal-weighted avg</div>
+    </div>`;
+  aggItem.addEventListener('click', async () => {
+    S.showAggregate = !S.showAggregate;
+    aggItem.querySelector('.coll-check').classList.toggle('checked', S.showAggregate);
+    if (S.showAggregate) await loadAllCollections();
+    redraw();
+  });
+  el.appendChild(aggItem);
+
+  const sep = document.createElement('div');
+  sep.style.cssText = 'height:1px;background:#1E293B;margin:8px 0';
+  el.appendChild(sep);
+
   S.collections.forEach(coll => {
     const color = S.colors.get(coll.slug);
     const checked = S.selected.has(coll.slug);
@@ -506,12 +607,8 @@ async function init() {
   setupGroup('scale-btns',  'scale',  redraw);
   setupGroup('range-btns',  'range',  redraw);
 
-  // Auto-select first collection
   if (S.collections.length > 0) {
-    const first = S.collections[0];
-    S.selected.add(first.slug);
-    await loadCollection(first.slug);
-    renderCollections();
+    await loadAllCollections();
     redraw();
   }
 }
