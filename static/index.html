@@ -435,6 +435,8 @@ function redraw() {
           borderColor: '#334155',
           borderWidth: 1,
           padding: 10,
+          filter: (item, index, array) =>
+            array.findIndex(i => i.datasetIndex === item.datasetIndex) === index,
           callbacks: {
             label(ctx) {
               const v = ctx.parsed.y;
