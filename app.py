@@ -2,6 +2,8 @@ from flask import Flask, jsonify, request, send_from_directory, redirect, url_fo
 from pathlib import Path
 import sqlite3
 import os
+
+os.environ.setdefault('OAUTHLIB_RELAX_TOKEN_SCOPE', '1')
 from datetime import datetime, timedelta
 from collections import defaultdict
 from flask_dance.contrib.google import make_google_blueprint, google
