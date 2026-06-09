@@ -137,7 +137,10 @@ def fetch_market_prices(slug: str) -> dict:
         offers_data = _get(f"{OPENSEA_BASE}/offers/collection/{slug}", {})
         offers = offers_data.get("offers") or []
         if offers:
-            best_offer = int(offers[0]["price"]["current"]["value"]) / 1e18
+            price = offers[0]["price"]
+            raw_val = price.get("value") or (price.get("current") or {}).get("value")
+            if raw_val is not None:
+                best_offer = int(raw_val) / 1e18
     except Exception:
         pass
 
