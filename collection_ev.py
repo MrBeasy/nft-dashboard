@@ -179,7 +179,7 @@ def fetch_collection_events(
         if cursor:
             params["next"] = cursor
         elif occurred_before:
-            params["occurred_before"] = occurred_before
+            params["before"] = occurred_before
 
         data = _get(f"{OPENSEA_BASE}/events/collection/{slug}", params)
         raw = data.get("asset_events", [])

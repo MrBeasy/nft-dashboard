@@ -404,10 +404,13 @@ function redraw() {
 
   document.getElementById('empty').style.display = hasData ? 'none' : 'flex';
 
-  if (chart) { chart.destroy(); chart = null; }
+  const canvas = document.getElementById('chart');
+  const existing = Chart.getChart(canvas);
+  if (existing) existing.destroy();
+  chart = null;
   if (!hasData) return;
 
-  const ctx = document.getElementById('chart').getContext('2d');
+  const ctx = canvas.getContext('2d');
   chart = new Chart(ctx, {
     type: 'line',
     data: { datasets },
@@ -415,21 +418,21 @@ function redraw() {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
-      interaction: { mode: 'x', intersect: false },
+      interaction: { mode: 'index', axis: 'x', intersect: false },
       plugins: {
         legend: {
           position: 'top',
           labels: {
-            color: '#64748B', font: { size: 11 },
+            color: '#CBD5E1', font: { size: 11 },
             boxWidth: 18, padding: 12,
             usePointStyle: false,
           },
         },
         tooltip: {
           backgroundColor: '#0F172A',
-          titleColor: '#CBD5E1',
-          bodyColor: '#64748B',
-          borderColor: '#1E293B',
+          titleColor: '#F1F5F9',
+          bodyColor: '#CBD5E1',
+          borderColor: '#334155',
           borderWidth: 1,
           padding: 10,
           callbacks: {
@@ -447,7 +450,7 @@ function redraw() {
           type: 'time',
           time: { tooltipFormat: 'MMM d, yyyy' },
           grid: { color: '#0F1929' },
-          ticks: { color: '#334155', maxTicksLimit: 10 },
+          ticks: { color: '#94A3B8', maxTicksLimit: 10 },
         },
         yR: {
           type: 'linear',
@@ -456,13 +459,13 @@ function redraw() {
           max: 100,
           grid: { color: '#0F1929' },
           ticks: {
-            color: '#334155',
+            color: '#94A3B8',
             callback: v => v + '%',
           },
           title: {
             display: true,
             text: S.metric === 'dump' ? 'Bid Dump % of Sales' : 'Listing % of Sales',
-            color: '#334155', font: { size: 10 },
+            color: '#94A3B8', font: { size: 10 },
           },
         },
         yP: {
@@ -471,7 +474,7 @@ function redraw() {
           min: S.scale === 'log' ? undefined : 0,
           grid: { display: false },
           ticks: {
-            color: '#334155',
+            color: '#94A3B8',
             callback(v) {
               return v >= 0.01 ? v.toFixed(3) + 'Ξ' : v.toExponential(1) + 'Ξ';
             },
@@ -479,7 +482,7 @@ function redraw() {
           title: {
             display: true,
             text: 'Daily Avg Sale Price (ETH)',
-            color: '#334155', font: { size: 10 },
+            color: '#94A3B8', font: { size: 10 },
           },
         },
       },
