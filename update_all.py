@@ -22,6 +22,8 @@ from dotenv import load_dotenv
 
 import db as _db
 from collection_ev import (
+    compute_daily_avg_spread,
+    compute_daily_volume,
     fetch_collection_events,
     fetch_market_prices,
     resolve_collection,
@@ -111,6 +113,18 @@ def update_collection(conn, slug: str, prices_only: bool) -> None:
         print(f"  backfilled {inserted:,} historical events")
     else:
         print("  no additional historical events found")
+
+    # Compute and persist spread + volume stats over all stored sales
+    all_sales = _db.get_sales(conn, slug, 0)
+    spread = compute_daily_avg_spread(all_sales, collection["total_fee_bps"])
+    volume = compute_daily_volume(all_sales)
+    if spread:
+        _db.update_spread(conn, slug, {**spread, **volume})
+        print(f"  spread: {spread['avg_gross_spread_eth']:+.4f} ETH gross / "
+              f"{spread['avg_net_spread_eth']:+.4f} ETH net "
+              f"({spread['pair_count']:,} days)  |  "
+              f"vol: {volume['avg_daily_sales_alltime']:.1f}/d alltime  "
+              f"{volume['avg_daily_sales_30d']:.1f}/d 30d")
 
 
 def main():

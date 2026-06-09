@@ -262,6 +262,83 @@ def build_pairs(events: list) -> list:
     return pairs
 
 
+def _trimmed_mean(values: list, trim: float = 0.10) -> float:
+    """Mean after discarding the bottom and top `trim` fraction of values."""
+    n = len(values)
+    k = int(n * trim)
+    if k == 0:
+        return mean(values)
+    return mean(sorted(values)[k:-k])
+
+
+def compute_daily_avg_spread(sales: list, total_fee_bps: int) -> dict:
+    """
+    For each day that has both listing and bid activity, compute per-day:
+      gross_pct = (avg_listing - avg_bid) / mid * 100
+      net_pct   = (gross - listing_fees) / mid * 100
+    Final averages use a 10% trimmed mean (drops top and bottom 10% of days).
+    """
+    daily = defaultdict(lambda: {"listing": [], "bid": []})
+    for s in sales:
+        day = s["timestamp"] // 86_400
+        daily[day][s["sale_type"]].append(s["price_eth"])
+
+    fee_rate = total_fee_bps / 10_000
+    gross_eths, net_eths, gross_pcts, net_pcts = [], [], [], []
+    for buckets in daily.values():
+        if not buckets["listing"] or not buckets["bid"]:
+            continue
+        avg_listing = mean(buckets["listing"])
+        avg_bid = mean(buckets["bid"])
+        mid = (avg_listing + avg_bid) / 2
+        gross = avg_listing - avg_bid
+        net = gross - avg_listing * fee_rate
+        gross_eths.append(gross)
+        net_eths.append(net)
+        if mid:
+            gross_pcts.append(gross / mid * 100)
+            net_pcts.append(net / mid * 100)
+
+    if not gross_eths:
+        return {}
+
+    return {
+        "avg_gross_spread_eth": _trimmed_mean(gross_eths),
+        "avg_net_spread_eth": _trimmed_mean(net_eths),
+        "avg_gross_spread_pct": _trimmed_mean(gross_pcts) if gross_pcts else None,
+        "avg_net_spread_pct": _trimmed_mean(net_pcts) if net_pcts else None,
+        "pair_count": len(gross_eths),
+    }
+
+
+def compute_daily_volume(sales: list) -> dict:
+    """
+    Trimmed-mean daily sale count, all-time and last 30 days.
+    Fills zeros for inactive days within each window so quiet periods are counted.
+    """
+    if not sales:
+        return {"avg_daily_sales_alltime": None, "avg_daily_sales_30d": None}
+
+    now = int(time.time())
+    cutoff_30d = now - 30 * 86_400
+
+    daily = defaultdict(int)
+    for s in sales:
+        daily[s["timestamp"] // 86_400] += 1
+
+    all_days = sorted(daily)
+    alltime_counts = [daily.get(d, 0) for d in range(all_days[0], all_days[-1] + 1)]
+
+    day_cutoff = cutoff_30d // 86_400
+    day_now = now // 86_400
+    counts_30d = [daily.get(d, 0) for d in range(day_cutoff, day_now + 1)]
+
+    return {
+        "avg_daily_sales_alltime": _trimmed_mean(alltime_counts),
+        "avg_daily_sales_30d": _trimmed_mean(counts_30d) if counts_30d else None,
+    }
+
+
 def compute_ev(pairs: list, events: list, total_fee_bps: int, mid_price: float | None,
                market_share_pct: float, timeframe_days: int) -> dict:
     fee_rate = total_fee_bps / 10_000

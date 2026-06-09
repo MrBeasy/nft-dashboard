@@ -182,6 +182,80 @@
       animation: spin 0.7s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Tab nav ─────────────────────────────────────────────────────────── */
+    .tab-group { display: flex; gap: 3px; margin-left: auto; }
+    .tab-btn {
+      padding: 5px 14px; font-size: 12px; border-radius: 5px;
+      border: 1px solid #1E293B; background: transparent;
+      color: #475569; cursor: pointer; transition: all 0.12s;
+      font-family: inherit;
+    }
+    .tab-btn:hover { color: #94A3B8; border-color: #334155; }
+    .tab-btn.on { background: #172554; border-color: #1D4ED8; color: #93C5FD; }
+
+    /* ── Spread view ─────────────────────────────────────────────────────── */
+    .spread-view {
+      display: none; flex: 1; overflow: auto;
+      padding: 28px 36px; min-height: 0;
+    }
+
+    .spread-table {
+      border-collapse: collapse; font-size: 13px; white-space: nowrap;
+    }
+
+    .spread-table th {
+      text-align: left; font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.1em; color: #64748B;
+      padding: 0 18px 12px 0; border-bottom: 1px solid #1E293B;
+      user-select: none;
+    }
+    .spread-table th + th { padding-left: 4px; }
+    .spread-table th[data-col] { cursor: pointer; }
+    .spread-table th[data-col]:hover { color: #94A3B8; }
+    .spread-table th.sort-active { color: #94A3B8; }
+    .spread-table th.sort-active::after { content: attr(data-arrow); margin-left: 4px; }
+
+    .spread-table td {
+      padding: 10px 18px 10px 0; border-bottom: 1px solid #0D1424;
+      vertical-align: middle; color: #94A3B8;
+    }
+    .spread-table td + td { padding-left: 4px; }
+    .spread-table tbody tr { transition: background 0.1s; }
+    .spread-table tbody tr:hover td { background: #0D1424; }
+    .spread-table tbody tr.no-data td { opacity: 0.5; }
+
+    /* Rank */
+    .rank-num { font-size: 11px; font-weight: 600; color: #475569; }
+    .rank-num.r1 { color: #FBBF24; }
+    .rank-num.r2 { color: #94A3B8; }
+    .rank-num.r3 { color: #C2773A; }
+
+    /* Collection cell */
+    .coll-cell { display: flex; align-items: center; gap: 9px; }
+    .coll-cell .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .coll-cell .name { color: #CBD5E1; min-width: 120px; max-width: 220px;
+      overflow: hidden; text-overflow: ellipsis; }
+
+    /* Bar cell (Net Spread %) */
+    .bar-td { position: relative; min-width: 160px; }
+    .bar-fill {
+      position: absolute; left: 0; top: 0; bottom: 0;
+      background: rgba(59,130,246,0.09);
+      border-right: 2px solid rgba(59,130,246,0.30);
+      pointer-events: none; transition: width 0.35s ease;
+    }
+    .bar-fill.neg { background: rgba(239,68,68,0.09); border-right-color: rgba(239,68,68,0.30); }
+    .bar-num {
+      position: relative; z-index: 1;
+      font-size: 13px; font-weight: 600; color: #60A5FA;
+    }
+    .bar-num.neg { color: #F87171; }
+
+    /* Value coloring */
+    .v-pos { color: #34D399; }
+    .v-neg { color: #F87171; }
+    .v-nil { color: #334155; }
   </style>
 </head>
 <body>
@@ -189,9 +263,13 @@
 <header>
   <h1>NFT Bid/Listing Dashboard</h1>
   <span class="subtitle">% sold via listing or bid dump vs avg sale price — rolling window</span>
+  <div class="tab-group">
+    <button class="tab-btn on" id="tab-chart">Chart</button>
+    <button class="tab-btn" id="tab-spread">Spread Ranking</button>
+  </div>
 </header>
 
-<div class="layout">
+<div class="layout" id="view-chart">
 
   <div class="sidebar">
     <div>
@@ -246,6 +324,27 @@
     </div>
   </div>
 
+</div>
+
+<div class="spread-view" id="view-spread">
+  <table class="spread-table" id="spread-table">
+    <thead>
+      <tr>
+        <th style="padding-right:24px">#</th>
+        <th>Collection</th>
+        <th class="sort-active" data-col="net_pct" data-arrow="↓">Net Spread %</th>
+        <th data-col="gross_pct">Gross %</th>
+        <th data-col="net_eth">Net Ξ</th>
+        <th data-col="vol_all">Sales/Day (All)</th>
+        <th data-col="vol_30d">Sales/Day (30d)</th>
+        <th data-col="ev">EV in ETH</th>
+        <th data-col="floor">Floor Ξ</th>
+        <th data-col="offer">Offer Ξ</th>
+        <th data-col="days">Days</th>
+      </tr>
+    </thead>
+    <tbody id="spread-tbody"></tbody>
+  </table>
 </div>
 
 <script>
@@ -596,6 +695,112 @@ function setupGroup(id, stateKey, onchange) {
   });
 }
 
+// ── Spread tab ────────────────────────────────────────────────────────────────
+
+const spreadSort = { col: 'net_pct', dir: 'desc' };
+
+function switchTab(tab) {
+  const isChart = tab === 'chart';
+  document.getElementById('tab-chart').classList.toggle('on', isChart);
+  document.getElementById('tab-spread').classList.toggle('on', !isChart);
+  document.getElementById('view-chart').style.display = isChart ? 'flex' : 'none';
+  document.getElementById('view-spread').style.display = isChart ? 'none' : 'block';
+  if (!isChart) renderSpreadTable();
+}
+
+function collEV(c) {
+  const f = c.floor_price_eth, p = c.avg_net_spread_pct, v = c.avg_daily_sales_30d;
+  return (f != null && p != null && v != null) ? f * (p / 100) * (v / 2) : null;
+}
+
+function spreadVal(c, col) {
+  return { net_pct: c.avg_net_spread_pct, gross_pct: c.avg_gross_spread_pct,
+           net_eth: c.avg_net_spread_eth, floor: c.floor_price_eth,
+           offer: c.best_offer_eth, days: c.spread_pair_count,
+           vol_all: c.avg_daily_sales_alltime, vol_30d: c.avg_daily_sales_30d,
+           ev: collEV(c) }[col] ?? null;
+}
+
+function fmtPct(v, cls) {
+  if (v == null) return `<span class="v-nil">—</span>`;
+  return `<span class="${cls ?? (v >= 0 ? 'v-pos' : 'v-neg')}">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</span>`;
+}
+function fmtEth(v) {
+  if (v == null) return `<span class="v-nil">—</span>`;
+  return `<span class="${v >= 0 ? 'v-pos' : 'v-neg'}">${v >= 0 ? '+' : ''}${v.toFixed(4)}</span>`;
+}
+function fmtNum(v, decimals = 4) {
+  return v != null ? v.toFixed(decimals) : `<span class="v-nil">—</span>`;
+}
+
+function renderSpreadTable() {
+  const colls = [...S.collections].sort((a, b) => {
+    const av = spreadVal(a, spreadSort.col), bv = spreadVal(b, spreadSort.col);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return spreadSort.dir === 'desc' ? bv - av : av - bv;
+  });
+
+  const pcts = colls.map(c => c.avg_net_spread_pct).filter(v => v != null);
+  const maxAbs = pcts.length ? Math.max(...pcts.map(Math.abs), 0.0001) : 1;
+
+  document.querySelectorAll('#spread-table th[data-col]').forEach(th => {
+    th.classList.toggle('sort-active', th.dataset.col === spreadSort.col);
+    if (th.dataset.col === spreadSort.col)
+      th.dataset.arrow = spreadSort.dir === 'desc' ? '↓' : '↑';
+  });
+
+  const tbody = document.getElementById('spread-tbody');
+  tbody.innerHTML = '';
+  let rank = 1;
+
+  for (const c of colls) {
+    const has = c.avg_net_spread_pct != null;
+    const n = c.avg_net_spread_pct;
+    const barW = has ? Math.min(100, Math.abs(n) / maxAbs * 100).toFixed(1) : 0;
+    const rankCls = rank === 1 ? 'r1' : rank === 2 ? 'r2' : rank === 3 ? 'r3' : '';
+    const color = S.colors.get(c.slug) ?? '#475569';
+
+    const tr = document.createElement('tr');
+    if (!has) tr.classList.add('no-data');
+    tr.innerHTML = `
+      <td><span class="rank-num ${has ? rankCls : ''}">${has ? rank : '—'}</span></td>
+      <td><div class="coll-cell">
+        <div class="dot" style="background:${color}"></div>
+        <span class="name" title="${c.name}">${c.name}</span>
+      </div></td>
+      <td class="bar-td">
+        ${has ? `<div class="bar-fill${n < 0 ? ' neg' : ''}" style="width:${barW}%"></div>
+        <span class="bar-num${n < 0 ? ' neg' : ''}">${n >= 0 ? '+' : ''}${n.toFixed(2)}%</span>`
+        : `<span class="v-nil">—</span>`}
+      </td>
+      <td>${fmtPct(c.avg_gross_spread_pct)}</td>
+      <td>${fmtEth(c.avg_net_spread_eth)}</td>
+      <td>${c.avg_daily_sales_alltime != null ? c.avg_daily_sales_alltime.toFixed(1) : '<span class="v-nil">—</span>'}</td>
+      <td>${c.avg_daily_sales_30d != null ? c.avg_daily_sales_30d.toFixed(1) : '<span class="v-nil">—</span>'}</td>
+      <td>${fmtEth(collEV(c))}</td>
+      <td>${fmtNum(c.floor_price_eth)}</td>
+      <td>${fmtNum(c.best_offer_eth)}</td>
+      <td>${c.spread_pair_count ?? '<span class="v-nil">—</span>'}</td>`;
+    if (has) rank++;
+    tbody.appendChild(tr);
+  }
+}
+
+function setupSpreadTable() {
+  document.getElementById('tab-chart').addEventListener('click', () => switchTab('chart'));
+  document.getElementById('tab-spread').addEventListener('click', () => switchTab('spread'));
+  document.querySelectorAll('#spread-table th[data-col]').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.col;
+      spreadSort.dir = spreadSort.col === col && spreadSort.dir === 'desc' ? 'asc' : 'desc';
+      spreadSort.col = col;
+      renderSpreadTable();
+    });
+  });
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 async function init() {
@@ -606,6 +811,7 @@ async function init() {
   S.collections.forEach((c, i) => S.colors.set(c.slug, PALETTE[i % PALETTE.length]));
 
   renderCollections();
+  setupSpreadTable();
 
   setupGroup('win-btns',    'window', redraw);
   setupGroup('metric-btns', 'metric', redraw);

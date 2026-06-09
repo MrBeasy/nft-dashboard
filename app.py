@@ -2,7 +2,9 @@ from flask import Flask, jsonify, request, send_from_directory, redirect, url_fo
 from pathlib import Path
 import sqlite3
 import os
+import time
 from dotenv import load_dotenv
+from collection_ev import compute_daily_avg_spread
 
 load_dotenv()
 os.environ.setdefault('OAUTHLIB_RELAX_TOKEN_SCOPE', '1')
@@ -86,10 +88,46 @@ def index():
 def api_collections():
     conn = get_db()
     rows = conn.execute(
-        'SELECT slug, name, floor_price_eth, best_offer_eth FROM collections ORDER BY name'
+        'SELECT slug, name, floor_price_eth, best_offer_eth, '
+        'avg_gross_spread_eth, avg_net_spread_eth, '
+        'avg_gross_spread_pct, avg_net_spread_pct, spread_pair_count, '
+        'avg_daily_sales_alltime, avg_daily_sales_30d '
+        'FROM collections ORDER BY name'
     ).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/spread')
+@login_required
+def api_spread():
+    slug = request.args.get('slug', '').strip()
+    days = request.args.get('days', type=int, default=0)
+    if not slug:
+        return jsonify({'error': 'slug required'}), 400
+
+    conn = get_db()
+    coll = conn.execute(
+        'SELECT total_fee_bps FROM collections WHERE slug = ?', (slug,)
+    ).fetchone()
+    if not coll:
+        conn.close()
+        return jsonify({'error': 'collection not found'}), 404
+
+    since_ts = 0 if days == 0 else int(time.time()) - days * 86_400
+    rows = conn.execute(
+        'SELECT timestamp, price_eth, sale_type FROM sales '
+        'WHERE collection_slug = ? AND timestamp >= ? ORDER BY timestamp',
+        (slug, since_ts)
+    ).fetchall()
+    conn.close()
+
+    sales = [dict(r) for r in rows]
+    spread = compute_daily_avg_spread(sales, coll['total_fee_bps'])
+    if not spread:
+        return jsonify({'error': 'insufficient data (need both bids and listings)'}), 422
+
+    return jsonify({**spread, 'slug': slug, 'days': days or 'all'})
 
 
 @app.route('/api/chart-data')

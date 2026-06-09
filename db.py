@@ -50,6 +50,21 @@ def init_db(conn: sqlite3.Connection) -> None:
             last_synced_at      INTEGER
         );
     """)
+    # Migrate: add spread columns if they don't exist yet
+    for col, typ in [
+        ("avg_gross_spread_eth", "REAL"),
+        ("avg_net_spread_eth", "REAL"),
+        ("avg_gross_spread_pct", "REAL"),
+        ("avg_net_spread_pct", "REAL"),
+        ("spread_pair_count", "INTEGER"),
+        ("spread_updated_at", "INTEGER"),
+        ("avg_daily_sales_alltime", "REAL"),
+        ("avg_daily_sales_30d", "REAL"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE collections ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     conn.commit()
 
 
@@ -75,6 +90,23 @@ def upsert_collection(conn: sqlite3.Connection, collection: dict, prices: dict) 
         "best_offer_eth": prices.get("best_offer"),
         "updated_at": int(time.time()),
     })
+    conn.commit()
+
+
+def update_spread(conn: sqlite3.Connection, slug: str, spread: dict) -> None:
+    """Persist computed daily-avg spread stats for a collection."""
+    conn.execute("""
+        UPDATE collections
+        SET avg_gross_spread_eth    = :avg_gross_spread_eth,
+            avg_net_spread_eth      = :avg_net_spread_eth,
+            avg_gross_spread_pct    = :avg_gross_spread_pct,
+            avg_net_spread_pct      = :avg_net_spread_pct,
+            spread_pair_count       = :pair_count,
+            spread_updated_at       = :updated_at,
+            avg_daily_sales_alltime = :avg_daily_sales_alltime,
+            avg_daily_sales_30d     = :avg_daily_sales_30d
+        WHERE slug = :slug
+    """, {**spread, "slug": slug, "updated_at": int(time.time())})
     conn.commit()
 
 
