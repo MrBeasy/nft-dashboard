@@ -5,6 +5,7 @@ import os
 import time
 from dotenv import load_dotenv
 from collection_ev import compute_daily_avg_spread
+import db as _db
 
 load_dotenv()
 os.environ.setdefault('OAUTHLIB_RELAX_TOKEN_SCOPE', '1')
@@ -16,6 +17,11 @@ from flask_login import LoginManager, login_required, login_user, logout_user, U
 
 BASE = Path(__file__).parent
 DB = BASE / 'collection_trades.db'
+
+# Run DB migrations on every startup so new columns are always present
+_startup_conn = _db.get_conn(str(DB))
+_db.init_db(_startup_conn)
+_startup_conn.close()
 
 app = Flask(__name__, static_folder=str(BASE / 'static'))
 
